@@ -263,7 +263,7 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
         
         EHistory.append(EK[0].cpu().data.numpy())
         
-        if epoch % mk == 0 and verbose == True:
+        if epoch % 1000 == 0 and verbose == True:
             print("u(x) MEAN:")
             print(NN.mean())
           
@@ -300,7 +300,7 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
         lrHistory.append(optimizer.param_groups[0]['lr'])
     
     
-        if epoch % mk == 0 and verbose == True:
+        if epoch % 1000 == 0 and verbose == True:
             print("LOSS:")
             print(lossHistory[-1])
             print("")

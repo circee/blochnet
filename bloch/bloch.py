@@ -43,14 +43,23 @@ class linear(torch.nn.Module):
     
 # bloch sde loss
 def blochLoss(psi, x, E, V, k):
-    psi_dx  = dfx(x,psi)
-    psi_ddx = dfx(x,psi_dx)
+    # psi_dx  = dfx(x,psi)
+    # psi_ddx = dfx(x,psi_dx)
     
+    psi_real = psi[0];psi_i = psi[1]
+
+    psi_real_dx = dfx(x,psi_real)
+    psi_real_ddx = dfx(x,psi_real_dx)
+
+    psi_i_dx = dfx(x,psi_i)
+
     K = k**2
     
-    f = ((K/2)+V-E)*psi - psi_ddx/2 
+    f = ((K/2)+V-E)*psi_real - psi_real_ddx/2
+
+    fi =  2*k*psi_i_dx
     
-    L = (f.pow(2)).mean(); 
+    L = (f.pow(2)+fi.pow(2)).mean(); 
     
     return L
 
@@ -60,6 +69,8 @@ def normLoss(nn, pts, period, k1, k2, epoch):
     k = ((k2-k1)*torch.rand(1)+k1).to(cuda).expand(pts).reshape(-1,1)
     k.requires_grad = True
     u,energy, NFE, ADJ = nn(x,k)
+
+    u = u[0]
 
     psi = torch.cos(k*x)*u
 
@@ -92,6 +103,8 @@ def bcLoss(nn, pts, b1, b2, k1, k2, verbose = False):
     # forward pass
     
     NN,KN, NFE, ADJ = nn(grid,kvec)
+
+    NN = NN[0]
     
     DNN = dfx(grid,NN)
     
@@ -160,7 +173,7 @@ class evpNet(torch.nn.Module):
         self.L1  = torch.nn.Linear(uneurons, uneurons)
         self.L2  = torch.nn.Linear(uneurons, uneurons)
         self.L3  = torch.nn.Linear(uneurons, uneurons)
-        self.out    = torch.nn.Linear(uneurons, 1)
+        self.out    = torch.nn.Linear(uneurons, 2)
         
         self.Ein  = torch.nn.Linear(1, eneurons)
         self.E1  = torch.nn.Linear(eneurons, eneurons)
@@ -174,48 +187,40 @@ class evpNet(torch.nn.Module):
         
         Lin = self.Lin(torch.cat((x,k),1))
         
-        L1 = self.L1(Lin)
-        h1 = self.actFtanh(L1)
+        L1 = self.L1(Lin); h = self.actFtanh(L1)
         
-        L2 = self.L2(h1)
-        h2  = self.actFtanh(L2)   
+        L2 = self.L2(h); h  = self.actFtanh(L2)   
         
-        L3 = self.L3(h2)
-        h3 = self.actFlin(L3)
+        L3 = self.L3(h); h = self.actFlin(L3)
         
-        U = self.out(h3)
+        U = self.out(h)
+
+        #Ureal  = (U[:,0]).reshape(-1,1);Ui  = (U[:,0]).reshape(-1,1) # pass U out and fork later?
         
         #Ein = self.Ein(torch.cat((U,k),1))
         Ein = self.Ein(k)
         
-        E1 = self.E1(Ein)
-        h1 = self.actFtanh(E1)
+        E1 = self.E1(Ein); h = self.actFtanh(E1)
         
-        E2 = self.E2(h1)
-        h2  = self.actFtanh(E2)   
+        E2 = self.E2(h); h  = self.actFtanh(E2)   
         
-        E3 = self.E3(h2)
-        h3 = self.actFlin(E3)
+        E3 = self.E3(h); h = self.actFlin(E3)
         
-        E = self.Eout(h3)
+        E = self.Eout(h)
         E_k = E
 
-        return U, E_k, nfe, E
+        extra = [nfe, E]
+
+        return U, E_k, extra
+        #return Ureal, Ui, E_k, extra
     
 def blochModel(eqParams, netParams,PATH, verbose = False):
     
-    b1 = eqParams[0]
-    b2 = eqParams[1]
-    k1 = eqParams[2]
-    k2 = eqParams[3]
-    v = eqParams[4]
+    b1 = eqParams[0]; b2 = eqParams[1]; k1 = eqParams[2]; k2 = eqParams[3]; v = eqParams[4]
+    
     print(eqParams)
-    neurons = netParams[0]
-    points = netParams[1]
-    epochs = netParams[2]
-    lr = netParams[3]
-    minLoss = netParams[4]
-    lrdecay = netParams[5]
+    
+    neurons = netParams[0]; points = netParams[1]; epochs = netParams[2]; lr = netParams[3]; minLoss = netParams[4]; lrdecay = netParams[5]
     
     nn1 = evpNet(neurons)
     nn1.to(cuda)
@@ -233,7 +238,7 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     width = abs(b2+b1)
     
     grid = (width*(torch.rand(points)).reshape(-1,1)).to(cuda).reshape(-1,1)
-    grid.sort()
+    grid.sort() #?
     grid.requires_grad = True
     
     k = torch.linspace(k1,k2,points).to(cuda).reshape(-1,1)
@@ -241,8 +246,6 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     
     time_start = time.time()
     for epoch in range(epochs):
-        
-        a = 1 ; b = 1
         
         loss = 0.0 ; BClossf = 0.0 ; blochloss = 0.0 ; BClossdf = 0.0 ; trivf = 0.0 ; trivdf = 0.0 ; nloss = 0.0 ; bcfLoss = 0.0
         

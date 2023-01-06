@@ -1,7 +1,5 @@
 #################################################################################################
-# Bloch network cross term maybe fix idk
-# AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-# AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+# awawa
 #################################################################################################
 
 import numpy as np
@@ -39,6 +37,11 @@ class linear(torch.nn.Module):
     @staticmethod
     def forward(input):
         return input
+    
+class snek(torch.nn.Module):
+    @staticmethod
+    def forward(input):
+        return (input + (torch.sin(input).pow(2)))
     
     
 # bloch sde loss
@@ -80,27 +83,32 @@ def normLoss(nn, pts, period, k1, k2, epoch):
 
     ur = u[:,0].reshape(-1,1); ui = u[:,1].reshape(-1,1)
 
-    #psi = torch.cos(k*x)*ur; psi_i = torch.sin(k*x)*ui
-
-#     prob = psi.pow(2)+psi_i.pow(2)
-
-#     psisum = torch.trapezoid(prob, x, dim=0)
-
-#     normerror = 1-torch.sqrt(psisum)
-
-    #prob = psi.pow(2) + psi_i.pow(2)
-    prob = ur.pow(2) + ui.pow(2)
+  # --------------------------------------------------------------------------------------  
+    probreal = ur.pow(2) 
+    probim = ui.pow(2)
     
 
-    probsum = torch.trapezoid(prob, x, dim=0)
+    #probsumre = torch.trapezoid(probreal, x, dim=0)
+    
+    #probsumim = torch.trapezoid(probim, x, dim=0)
+    
+    ps = torch.trapezoid((probreal+probim), x, dim=0)
+  # --------------------------------------------------------------------------------------  
+    
+    #orthosum = torch.trapezoid((ur+ui).pow(2), x, dim=0)
     
 
     #normerror = 1-torch.sqrt(psisum)
     #normerror = (1/probsum.mean())-1
-    p = probsum.mean()
+    #p = probsum.mean()
+    #o = orthosum.mean()
     
-    normerror = abs(torch.sqrt(p)-1)#.pow(2)
-    return normerror
+    #normerror = (torch.sqrt(p)-1).pow(2)
+    #normerror = o + (torch.sqrt(p)-1).pow(2)
+    
+    normerror = (1 - torch.sqrt(ps)).pow(2)
+    
+    return normerror.mean()
     
     #return (normerror.pow(2))#.mean()
     
@@ -230,16 +238,21 @@ def bcImLoss(nn, pts, b1, b2, k1, k2, verbose = False):
 
     return L, DL
 
-def kronigPenney(X, V, L, a):
+def kronigPenney(X, V, L, a, N):
     # Gives the potential V at each point
     X = X.cpu()
     X = X.data.numpy()
 
     # approximate square wave 
-    Vnp = V/(1+((X-(0.5))/(a/2))**30)
+    Vnp = V/(1+((X-(0.5))/(a/2))**4)
+    #Vnp = (V/(1+((X-(0.75))/(a/2))**4))+(-0.5*V/(1+((X-(0.25))/(a/2))**4))
     
     Vtorch = torch.from_numpy(Vnp)
     Vtorch = Vtorch.cuda()
+    return Vtorch
+
+def freeParticle(X, V, L, a, N):
+    Vtorch = torch.zeros_like(X)
     return Vtorch
 
 class evpNet(torch.nn.Module):
@@ -252,11 +265,11 @@ class evpNet(torch.nn.Module):
         self.actFlin = linear()
         self.actFtanh = tanh()
         
-        self.ENactF = sin()
-        self.FNactF = sin()
+        self.ENactF = snek()
+        self.FNactF = tanh()
         
         eneurons = neurons #
-        uneurons = 32
+        uneurons = 64
         
         self.Lin  = torch.nn.Linear(2, uneurons)
         self.L1  = torch.nn.Linear(uneurons, uneurons)
@@ -269,32 +282,37 @@ class evpNet(torch.nn.Module):
         self.E1  = torch.nn.Linear(eneurons, eneurons)
         self.E2  = torch.nn.Linear(eneurons, eneurons)
         self.E3  = torch.nn.Linear(eneurons, eneurons)
+        self.E4  = torch.nn.Linear(eneurons, eneurons)
         self.Eout    = torch.nn.Linear(eneurons, 1)
         
     def forward(self,x,k):
         
         nfe = (1/2)*k**2
         
-        Ein = self.Ein(k); Enin = self.Ein(-1*k)
+        Ein = self.Ein(k)#; Enin = self.Ein(-1*k)
         
-        E1 = self.E1(Ein); h = self.ENactF(E1); En1 = self.E1(Enin); h_n = self.ENactF(En1)
+        E1 = self.E1(Ein); h = self.ENactF(E1)#; En1 = self.E1(Enin); h_n = self.ENactF(En1)
         
-        E2 = self.E2(h); h  = self.ENactF(E2); En2 = self.E2(h_n); h_n  = self.ENactF(En2)   
+        E2 = self.E2(h); h  = self.ENactF(E2)#; En2 = self.E2(h_n); h_n  = self.ENactF(En2)   
         
-        E3 = self.E3(h); h = self.actFlin(E3); En3 = self.E3(h_n); h_n = self.actFlin(En3)
+        #E3 = self.E3(h); h = self.ENactF(E3)#; En3 = self.E3(h_n); h_n = self.actFlin(En3)
         
-        E = self.Eout(h+h_n)
-        E_k = E#+nfe
+        #E4 = self.E4(h); h = self.ENactF(E4)#; En4 = self.E4(h_n); h_n = self.actFlin(En4)
         
-        Lin = self.Lin(torch.cat((x,E_k),1))
+        E = self.Eout(h)
+        #E = self.Eout(h)
+        #E_k = E + nfe
         
-        L1 = self.L1(Lin); h = self.FNactF(L1)
+        #Lin = self.Lin(torch.cat((x,E_k),1))
+        Lin = self.Lin(torch.cat((x,E),1))
+        
+        L1 = self.L1(Lin); h = self.actFsin(L1)
         
         L2 = self.L2(h); h  = self.FNactF(L2)   
         
-        L3 = self.L3(h); h = self.actFlin(L3)
+        L3 = self.L3(h); h = self.FNactF(L3)
         
-        L4 = self.L4(h); h = self.actFlin(L4)
+        #L4 = self.L4(h); h = self.actFlin(L4)#h = self.actFlin(L4)
         
         U = self.out(h)
 
@@ -305,12 +323,15 @@ class evpNet(torch.nn.Module):
 
         extra = [nfe, E]
 
-        return U, E_k, nfe, extra
+        return U, E, nfe, extra#return U, E_k, nfe, extra
         #return Ureal, Ui, E_k, extra
     
 def blochModel(eqParams, netParams,PATH, verbose = False):
     
-    b1 = eqParams[0]; b2 = eqParams[1]; k1 = eqParams[2]; k2 = eqParams[3]; v = eqParams[4]
+    #eqParams = [b1,b2,k1d,k2d,V,period,npts,decayratio] netParams = [neurons, samplePoints, epochs, lr, minLoss, lrdecay]
+    #            0  1   2   3  4   5     6      7                       0        1             2      3     4        5
+    
+    b1 = eqParams[0]; b2 = eqParams[1]; k1 = eqParams[2]; k2 = eqParams[3]; v = eqParams[4]; npts = eqParams[6]; decayratio = eqParams[7]
     
     print(eqParams)
     
@@ -321,9 +342,12 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     nn2 = copy.deepcopy(nn1)
 
     # optimizer
-    betas = [0.999, 0.9999] 
+    betas = [0.99, 0.999] #betas = [0.999, 0.9999] 
     optimizer = optim.Adam(nn1.parameters(), lr=lr, betas=betas)
-    scheduler = lr_scheduler.LinearLR(optimizer, start_factor=1, end_factor=lrdecay, total_iters=epochs)
+
+    #scheduler = lr_scheduler.StepLR(optimizer, step_size=int(epochs*decayratio)+1, gamma=lrdecay)
+    
+    scheduler = lr_scheduler.LinearLR(optimizer, start_factor=1, end_factor=lrdecay, total_iters=int(epochs*decayratio)+1)
     
     loss = [] ; lossHistory = [] ; tHistory = [] ; EHistory = [] ; blochLossHistory = [] ; trivLossHistory = [] ; BCfLossHistory = [] ; BCdfLossHistory = [] ; trivfLossHistory = [] ; trivdfLossHistory = [] ; Residuals = [] ; nlossHistory = [] ; lrHistory = [] ; blochLossImaginaryHistory = [] ; BCimfLossHistory = [] ; BCimdfLossHistory = []
     tepochs = 0
@@ -386,9 +410,11 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
             grid = grid.reshape(-1,1)
             grid.requires_grad = True
             
-        
-        V = kronigPenney(grid, v, width, b1)
-    
+        if epoch > 1000:
+            V = kronigPenney(grid, v, width, b1, npts)
+        else:
+            V = freeParticle(grid, v, width, b1, npts)
+            
         NN, EK, NFE, ADJ = nn1(grid,k)
         
         EHistory.append(EK[0].cpu().data.numpy())
@@ -400,16 +426,15 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
         # CALCULATE LOSS TERMS
         bloch_loss_real, bloch_loss_imaginary = blochLoss(NN, grid, EK, V, k)
         
-        bc_loss_f, bc_loss_df = bcLoss(nn1, 1000, 0, width, k1, k2) # network, point pairs, left bound, right bound, k1, k2
-        bc_im_loss_f, bc_im_loss_df = bcImLoss(nn1, 1000, 0, width, k1, k2)
+        bc_loss_f, bc_loss_df = bcLoss(nn1, 100, 0, width, k1, k2) # network, point pairs, left bound, right bound, k1, k2
+        bc_im_loss_f, bc_im_loss_df = bcImLoss(nn1, 100, 0, width, k1, k2)
         
-        norm_loss = normLoss(nn1, 1000, width, k1, k2, epoch)
+        norm_loss = normLoss(nn1, 100, width, k1, k2, epoch)
         
         # OPTIM 
         lossTotal = bloch_loss_real + bloch_loss_imaginary + bc_loss_f + bc_loss_df + bc_im_loss_f + bc_im_loss_df + norm_loss
-        
         lossTotal.backward(retain_graph = False) 
-        
+
         optimizer.step() # optimize 
         scheduler.step()
         
@@ -421,8 +446,8 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
         blochlossi += bloch_loss_imaginary.cpu().data.numpy() # sum total loss for this iteration
         BCimlossf += bc_im_loss_f.cpu().data.numpy()
         BCimlossdf += bc_im_loss_df.cpu().data.numpy()
-        
-        optimizer.zero_grad() # nullify loss gradients
+
+        optimizer.zero_grad() # optimize 
     
         lossHistory.append(loss) # append total loss history
         blochLossHistory.append(blochloss)
@@ -432,8 +457,8 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
         blochLossImaginaryHistory.append(blochlossi)
         BCimfLossHistory.append(BCimlossf)
         BCimdfLossHistory.append(BCimlossdf)
-        
-        lrHistory.append(optimizer.param_groups[0]['lr'])
+
+        lrHistory.append(optimizer.param_groups[0]['lr']) 
     
     
         if epoch % 1000 == 0 and verbose == True:
@@ -452,12 +477,12 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
             
             
         # keep the best model (lowest loss) by using a deep copy
-        if  lossTotal < lossLim:
+        if  lossTotal < lossLim and epoch > 1000:
             nn2 =  copy.deepcopy(nn1)
             lossLim=lossTotal
 
         # terminate training after loss threshold is reached 
-        if lossTotal < minLoss and minLoss != -1 and epoch > 0.05*epochs:
+        if lossTotal < minLoss and minLoss != -1 and epoch > 1000:
             nn2 =  copy.deepcopy(nn1)
             print('Reached target loss')
             tepochs = epoch
@@ -468,6 +493,7 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     
     # print total runtime 
     print('Total runtime: ' + str(round(runTime,2)) + ' seconds')
+    print('Final LR: '+ str(optimizer.param_groups[0]['lr']))
     
     torch.save({
     'epoch': epoch,

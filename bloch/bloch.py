@@ -1,5 +1,7 @@
 #################################################################################################
-# awawa
+# Bloch network cross term maybe fix idk
+# AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+# AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 #################################################################################################
 
 import numpy as np
@@ -7,6 +9,7 @@ import torch
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.autograd import grad
+from torch.distributions.beta import Beta
 import matplotlib.pyplot as plot
 import time
 import copy
@@ -32,6 +35,11 @@ class sin(torch.nn.Module):
     @staticmethod
     def forward(input):
         return torch.sin(input)
+    
+class normSin(torch.nn.Module):
+    @staticmethod
+    def forward(input):
+        return torch.sin((355/113)*input)
     
 class linear(torch.nn.Module):
     @staticmethod
@@ -106,7 +114,8 @@ def normLoss(nn, pts, period, k1, k2, epoch):
     #normerror = (torch.sqrt(p)-1).pow(2)
     #normerror = o + (torch.sqrt(p)-1).pow(2)
     
-    normerror = (1 - torch.sqrt(ps)).pow(2)
+    #normerror = (1 - torch.sqrt(ps)).pow(2)
+    normerror = (torch.sqrt(ps)-1).pow(2)
     
     return normerror.mean()
     
@@ -240,36 +249,47 @@ def bcImLoss(nn, pts, b1, b2, k1, k2, verbose = False):
 
 def kronigPenney(X, V, L, a, N):
     # Gives the potential V at each point
-    X = X.cpu()
-    X = X.data.numpy()
+    #X = X.cpu()
+    #X = X.data.numpy()
 
     # approximate square wave 
     Vnp = V/(1+((X-(0.5))/(a/2))**4)
     #Vnp = (V/(1+((X-(0.75))/(a/2))**4))+(-0.5*V/(1+((X-(0.25))/(a/2))**4))
     
-    Vtorch = torch.from_numpy(Vnp)
-    Vtorch = Vtorch.cuda()
-    return Vtorch
+    #Vtorch = torch.from_numpy(Vnp)
+    #Vtorch = Vtorch.cuda()
+    return Vnp#Vtorch
+
+def coulombPotential(X, V, L, a, N):
+    # Gives the potential V at each point
+    #X = X.cpu()
+    #X = X.data.numpy()
+
+    Vnp = -V/(0.2+(10*(X-0.5))**2)
+    
+    #Vtorch = torch.from_numpy(Vnp)
+    #Vtorch = Vtorch.cuda()
+    return Vnp#Vtorch
 
 def freeParticle(X, V, L, a, N):
     Vtorch = torch.zeros_like(X)
     return Vtorch
 
 class evpNet(torch.nn.Module):
-    def __init__(self,neurons=100):
+    def __init__(self,eneurons=64,uneurons=128):
         super(evpNet,self).__init__()
         
         # Activation Function
         self.actFsig = torch.nn.Sigmoid()
+        self.relu = torch.nn.ReLU()
         self.actFsin = sin()
         self.actFlin = linear()
         self.actFtanh = tanh()
+        self.normSine = normSin()
+        self.snek = snek()
         
         self.ENactF = snek()
         self.FNactF = tanh()
-        
-        eneurons = neurons #
-        uneurons = 64
         
         self.Lin  = torch.nn.Linear(2, uneurons)
         self.L1  = torch.nn.Linear(uneurons, uneurons)
@@ -295,7 +315,7 @@ class evpNet(torch.nn.Module):
         
         E2 = self.E2(h); h  = self.ENactF(E2)#; En2 = self.E2(h_n); h_n  = self.ENactF(En2)   
         
-        #E3 = self.E3(h); h = self.ENactF(E3)#; En3 = self.E3(h_n); h_n = self.actFlin(En3)
+        E3 = self.E3(h); h = self.ENactF(E3)#; En3 = self.E3(h_n); h_n = self.actFlin(En3)
         
         #E4 = self.E4(h); h = self.ENactF(E4)#; En4 = self.E4(h_n); h_n = self.actFlin(En4)
         
@@ -306,13 +326,13 @@ class evpNet(torch.nn.Module):
         #Lin = self.Lin(torch.cat((x,E_k),1))
         Lin = self.Lin(torch.cat((x,E),1))
         
-        L1 = self.L1(Lin); h = self.actFsin(L1)
+        L1 = self.L1(Lin); h = self.normSine(L1)
         
         L2 = self.L2(h); h  = self.FNactF(L2)   
         
         L3 = self.L3(h); h = self.FNactF(L3)
         
-        #L4 = self.L4(h); h = self.actFlin(L4)#h = self.actFlin(L4)
+        #L4 = self.L4(h); h = self.FNactF(L4)#h = self.actFlin(L4)
         
         U = self.out(h)
 
@@ -325,8 +345,17 @@ class evpNet(torch.nn.Module):
 
         return U, E, nfe, extra#return U, E_k, nfe, extra
         #return Ureal, Ui, E_k, extra
+def evalModel(en, un, PATH):
     
-def blochModel(eqParams, netParams,PATH, verbose = False):
+    nn1 = evpNet(en,un)
+    nn1.to(cuda)
+    savepoint = torch.load(PATH)
+    nn1.load_state_dict(savepoint['model_state_dict'])
+    print('Loaded model at '+PATH)
+    return nn1
+
+
+def blochModel(eqParams, netParams,PATH, verbose = False, checkpoint=False):
     
     #eqParams = [b1,b2,k1d,k2d,V,period,npts,decayratio] netParams = [neurons, samplePoints, epochs, lr, minLoss, lrdecay]
     #            0  1   2   3  4   5     6      7                       0        1             2      3     4        5
@@ -335,15 +364,15 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     
     print(eqParams)
     
-    neurons = netParams[0]; points = netParams[1]; epochs = netParams[2]; lr = netParams[3]; minLoss = netParams[4]; lrdecay = netParams[5]
+    en_neurons = netParams[0]; fn_neurons = netParams[1]; points = netParams[2]; epochs = netParams[3]; lr = netParams[4]; minLoss = netParams[5]; lrdecay = netParams[6]; alphabeta = netParams[7]
     
-    nn1 = evpNet(neurons)
+    nn1 = evpNet(en_neurons,fn_neurons)
     nn1.to(cuda)
     nn2 = copy.deepcopy(nn1)
 
     # optimizer
     betas = [0.99, 0.999] #betas = [0.999, 0.9999] 
-    optimizer = optim.Adam(nn1.parameters(), lr=lr, betas=betas)
+    optimizer = optim.Adam(nn1.parameters(), lr=0.0008, betas=betas)
 
     #scheduler = lr_scheduler.StepLR(optimizer, step_size=int(epochs*decayratio)+1, gamma=lrdecay)
     
@@ -353,6 +382,12 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     tepochs = 0
     lossLim = 10e10 
     
+    if checkpoint == True:
+        savepoint = torch.load(PATH)
+        nn1.load_state_dict(savepoint['model_state_dict'])
+        #optimizer.load_state_dict(savepoint['optimizer_state_dict'])
+        lossLim = savepoint['loss']
+        
     width = abs(b2+b1)
     
     #grid = (width*(torch.rand(points)).reshape(-1,1)).to(cuda).reshape(-1,1)
@@ -378,7 +413,9 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     k.requires_grad = True
     print(k.size())
     
-    
+
+        
+        
     time_start = time.time()
     for epoch in range(epochs):
         
@@ -388,12 +425,17 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
         if epoch % 1000 == 0 and verbose == True:
             print("EPOCH:")
             print(epoch)
-        
+            
+#####################################################################################################################################################
             
         resample = 1
+        #alphabeta = 0.99
         
+        
+        kdist = Beta(torch.tensor([alphabeta]), torch.tensor([alphabeta]))
         if epoch % resample  == 0 and epoch != 0:
-            kvec = (((k2-k1)*torch.rand((points)))+k1).to(cuda)#.reshape(-1,1)
+
+            kvec = ((k2-k1)*kdist.rsample((points,))+k1).to(cuda)
 
             k = torch.column_stack((kvec,kvec))
             for i in range(points-2):
@@ -410,14 +452,17 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
             grid = grid.reshape(-1,1)
             grid.requires_grad = True
             
-        if epoch > 1000:
-            V = kronigPenney(grid, v, width, b1, npts)
+#####################################################################################################################################################
+        FPswitch = 1000    
+        
+        if epoch > FPswitch or checkpoint == True:
+            V = coulombPotential(grid, v, width, b1, npts)
         else:
             V = freeParticle(grid, v, width, b1, npts)
             
         NN, EK, NFE, ADJ = nn1(grid,k)
         
-        EHistory.append(EK[0].cpu().data.numpy())
+        EHistory.append(EK[0].clone())#EHistory.append(EK[0].cpu().data.numpy())
         
         if epoch % 1000 == 0 and verbose == True:
             print("u(x) MEAN:")
@@ -432,7 +477,7 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
         norm_loss = normLoss(nn1, 100, width, k1, k2, epoch)
         
         # OPTIM 
-        lossTotal = bloch_loss_real + bloch_loss_imaginary + bc_loss_f + bc_loss_df + bc_im_loss_f + bc_im_loss_df + norm_loss
+        lossTotal = bloch_loss_real + bloch_loss_imaginary + norm_loss + bc_loss_f + bc_loss_df + bc_im_loss_f + bc_im_loss_df 
         lossTotal.backward(retain_graph = False) 
 
         optimizer.step() # optimize 
@@ -447,6 +492,7 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
         BCimlossf += bc_im_loss_f.cpu().data.numpy()
         BCimlossdf += bc_im_loss_df.cpu().data.numpy()
 
+        
         optimizer.zero_grad() # optimize 
     
         lossHistory.append(loss) # append total loss history
@@ -477,12 +523,12 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
             
             
         # keep the best model (lowest loss) by using a deep copy
-        if  lossTotal < lossLim and epoch > 1000:
+        if  lossTotal < lossLim and epoch > FPswitch:# and epoch > epochs*0.5: # ADD CHECKPOINT CONDITION
             nn2 =  copy.deepcopy(nn1)
             lossLim=lossTotal
 
         # terminate training after loss threshold is reached 
-        if lossTotal < minLoss and minLoss != -1 and epoch > 1000:
+        if lossTotal < minLoss and minLoss != -1 and epoch > FPswitch: # ADD CHECKPOINT CONDITION
             nn2 =  copy.deepcopy(nn1)
             print('Reached target loss')
             tepochs = epoch
@@ -491,9 +537,12 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     time_end = time.time()
     runTime = time_end - time_start
     
-    # print total runtime 
+    if tepochs == 0:
+        tepochs = epochs
+    # print metrics 
     print('Total runtime: ' + str(round(runTime,2)) + ' seconds')
     print('Final LR: '+ str(optimizer.param_groups[0]['lr']))
+    print(str(round(tepochs/runTime,2)) + ' epochs/s')
     
     torch.save({
     'epoch': epoch,
@@ -501,10 +550,7 @@ def blochModel(eqParams, netParams,PATH, verbose = False):
     'optimizer_state_dict': optimizer.state_dict(),
     'loss': lossTotal,
     }, PATH)
-
-    if tepochs == 0:
-        tepochs = epochs
-        
+    
     isthisloss = [lossHistory, blochLossHistory, BCfLossHistory, BCdfLossHistory, trivfLossHistory, trivdfLossHistory, lrHistory, blochLossImaginaryHistory, BCimfLossHistory, BCimdfLossHistory]
         
     return nn2, nn1, runTime, tepochs, isthisloss, tHistory, EHistory
